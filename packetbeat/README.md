@@ -53,4 +53,4 @@ Packetbeat needs to capture network packets from a raw socket. To be able to sta
 
 `sudo setcap cap_net_raw=ep packetbeat`
 
-After that you can start packetbeat as any user. This will not work in a nosuid mount (e.g. Ubuntu home directory), but /usr/bin should be fine. I'm pretty sure systemd can set process capabilities too, and that might be the most acceptable solution for your sysadmins.
+After that you can start packetbeat as any user. This will not work in a nosuid mount (e.g. Ubuntu home directory), but /usr/bin should be fine. Systemd should be able to set process capabilities too, and that might be the most acceptable solution for your sysadmins.
