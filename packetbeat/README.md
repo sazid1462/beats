@@ -43,3 +43,14 @@ We love contributions from our community! Please read the
 ## Snapshots
 
 For testing purposes, we generate snapshot builds that you can find [here](https://beats-nightlies.s3.amazonaws.com/index.html?prefix=packetbeat). Please be aware that these are built on top of master and are not meant for production.
+
+## Build from source
+
+`cd beats/packetbeat`
+`make`
+
+Packetbeat needs to capture network packets from a raw socket. To be able to start it as non root user run following command:
+
+`sudo setcap cap_net_raw=ep packetbeat`
+
+After that you can start packetbeat as any user. This will not work in a nosuid mount (e.g. Ubuntu home directory), but /usr/bin should be fine. I'm pretty sure systemd can set process capabilities too, and that might be the most acceptable solution for your sysadmins.

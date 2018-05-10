@@ -685,6 +685,15 @@ packetbeat.protocols:
 
 # Configure what output to use when sending the data collected by the beat.
 
+#------------------------------ Custom Endpoint output ----------------------------------
+
+#output.customendpoint:
+  #host: "http://localhost"
+  #port: 5000
+  #path: "/send-data"
+# A jwt token to authenticate to the api endpoint
+  #token: "[provided jwt token]"
+
 #-------------------------- Elasticsearch output -------------------------------
 output.elasticsearch:
   # Boolean flag to enable or disable the output module.
