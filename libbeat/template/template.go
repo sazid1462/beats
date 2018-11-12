@@ -1,13 +1,32 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package template
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/elastic/beats/libbeat/beat"
 	"github.com/elastic/beats/libbeat/common"
 	"github.com/elastic/beats/libbeat/common/cfgwarn"
 	"github.com/elastic/beats/libbeat/common/fmtstr"
+	"github.com/elastic/go-ucfg/yaml"
 )
 
 var (
@@ -18,9 +37,12 @@ var (
 
 	// Array to store dynamicTemplate parts in
 	dynamicTemplates []common.MapStr
+
+	defaultFields []string
 )
 
 type Template struct {
+	sync.Mutex
 	name        string
 	pattern     string
 	beatVersion common.Version
@@ -92,14 +114,16 @@ func New(beatVersion string, beatName string, esVersion string, config TemplateC
 	}, nil
 }
 
-// Load the given input and generates the input based on it
-func (t *Template) Load(file string) (common.MapStr, error) {
+func (t *Template) load(fields common.Fields) (common.MapStr, error) {
 
-	fields, err := common.LoadFieldsYaml(file)
-	if err != nil {
-		return nil, err
-	}
+	// Locking to make sure dynamicTemplates and defaultFields is not accessed in parallel
+	t.Lock()
+	defer t.Unlock()
 
+	dynamicTemplates = nil
+	defaultFields = nil
+
+	var err error
 	if len(t.config.AppendFields) > 0 {
 		cfgwarn.Experimental("append_fields is used.")
 		fields, err = appendFields(fields, t.config.AppendFields)
@@ -117,6 +141,27 @@ func (t *Template) Load(file string) (common.MapStr, error) {
 	output := t.Generate(properties, dynamicTemplates)
 
 	return output, nil
+}
+
+// LoadFile loads the the template from the given file path
+func (t *Template) LoadFile(file string) (common.MapStr, error) {
+
+	fields, err := common.LoadFieldsYaml(file)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.load(fields)
+}
+
+// LoadBytes loads the the template from the given byte array
+func (t *Template) LoadBytes(data []byte) (common.MapStr, error) {
+	fields, err := loadYamlByte(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.load(fields)
 }
 
 // GetName returns the name of the template
@@ -163,6 +208,11 @@ func (t *Template) Generate(properties common.MapStr, dynamicTemplates []common.
 	version61, _ := common.NewVersion("6.1.0")
 	if !t.esVersion.LessThan(version61) {
 		indexSettings.Put("number_of_routing_shards", defaultNumberOfRoutingShards)
+	}
+
+	if t.esVersion.IsMajor(7) {
+		defaultFields = append(defaultFields, "fields.*")
+		indexSettings.Put("query.default_field", defaultFields)
 	}
 
 	indexSettings.DeepUpdate(t.config.Settings.Index)
@@ -223,6 +273,24 @@ func appendFields(fields, appendFields common.Fields) (common.Fields, error) {
 		}
 		// Appends fields to existing fields
 		fields = append(fields, appendFields...)
+	}
+	return fields, nil
+}
+
+func loadYamlByte(data []byte) (common.Fields, error) {
+
+	var keys []common.Field
+
+	cfg, err := yaml.NewConfig(data)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Unpack(&keys)
+
+	fields := common.Fields{}
+
+	for _, key := range keys {
+		fields = append(fields, key.Fields...)
 	}
 	return fields, nil
 }

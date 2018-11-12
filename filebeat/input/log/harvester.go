@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 // Package log harvests different inputs for new information. Currently
 // two harvester types exist:
 //
@@ -20,7 +37,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/satori/go.uuid"
+	"github.com/gofrs/uuid"
 	"golang.org/x/text/transform"
 
 	"github.com/elastic/beats/libbeat/beat"
@@ -31,10 +48,13 @@ import (
 
 	"github.com/elastic/beats/filebeat/channel"
 	"github.com/elastic/beats/filebeat/harvester"
-	"github.com/elastic/beats/filebeat/harvester/encoding"
-	"github.com/elastic/beats/filebeat/harvester/reader"
 	"github.com/elastic/beats/filebeat/input/file"
 	"github.com/elastic/beats/filebeat/util"
+	"github.com/elastic/beats/libbeat/reader"
+	"github.com/elastic/beats/libbeat/reader/multiline"
+	"github.com/elastic/beats/libbeat/reader/readfile"
+	"github.com/elastic/beats/libbeat/reader/readfile/encoding"
+	"github.com/elastic/beats/libbeat/reader/readjson"
 )
 
 var (
@@ -93,6 +113,11 @@ func NewHarvester(
 	outletFactory OutletFactory,
 ) (*Harvester, error) {
 
+	id, err := uuid.NewV4()
+	if err != nil {
+		return nil, err
+	}
+
 	h := &Harvester{
 		config:        defaultConfig,
 		state:         state,
@@ -100,7 +125,7 @@ func NewHarvester(
 		publishState:  publishState,
 		done:          make(chan struct{}),
 		stopWg:        &sync.WaitGroup{},
-		id:            uuid.NewV4(),
+		id:            id,
 		outletFactory: outletFactory,
 	}
 
@@ -267,6 +292,7 @@ func (h *Harvester) Run() error {
 		// This is important in case sending is not successful so on shutdown
 		// the old offset is reported
 		state := h.getState()
+		startingOffset := state.Offset
 		state.Offset += int64(message.Bytes)
 
 		// Create state event
@@ -280,8 +306,12 @@ func (h *Harvester) Run() error {
 		// Check if data should be added to event. Only export non empty events.
 		if !message.IsEmpty() && h.shouldExportLine(text) {
 			fields := common.MapStr{
-				"source": state.Source,
-				"offset": state.Offset, // Offset here is the offset before the starting char.
+				"log": common.MapStr{
+					"offset": startingOffset, // Offset here is the offset before the starting char.
+					"file": common.MapStr{
+						"path": state.Source,
+					},
+				},
 			}
 			fields.DeepUpdate(message.Fields)
 
@@ -296,7 +326,7 @@ func (h *Harvester) Run() error {
 			}
 
 			if h.config.JSON != nil && len(jsonFields) > 0 {
-				ts := reader.MergeJSONFields(fields, jsonFields, &text, *h.config.JSON)
+				ts := readjson.MergeJSONFields(fields, jsonFields, &text, *h.config.JSON)
 				if !ts.IsZero() {
 					// there was a `@timestamp` key in the event, so overwrite
 					// the resulting timestamp
@@ -528,28 +558,28 @@ func (h *Harvester) newLogFileReader() (reader.Reader, error) {
 		return nil, err
 	}
 
-	r, err = reader.NewEncode(h.log, h.encoding, h.config.BufferSize)
+	r, err = readfile.NewEncodeReader(h.log, h.encoding, h.config.BufferSize)
 	if err != nil {
 		return nil, err
 	}
 
 	if h.config.DockerJSON != nil {
 		// Docker json-file format, add custom parsing to the pipeline
-		r = reader.NewDockerJSON(r, h.config.DockerJSON.Stream, h.config.DockerJSON.Partial)
+		r = readjson.New(r, h.config.DockerJSON.Stream, h.config.DockerJSON.Partial, h.config.DockerJSON.ForceCRI, h.config.DockerJSON.CRIFlags)
 	}
 
 	if h.config.JSON != nil {
-		r = reader.NewJSON(r, h.config.JSON)
+		r = readjson.NewJSONReader(r, h.config.JSON)
 	}
 
-	r = reader.NewStripNewline(r)
+	r = readfile.NewStripNewline(r)
 
 	if h.config.Multiline != nil {
-		r, err = reader.NewMultiline(r, "\n", h.config.MaxBytes, h.config.Multiline)
+		r, err = multiline.New(r, "\n", h.config.MaxBytes, h.config.Multiline)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return reader.NewLimit(r, h.config.MaxBytes), nil
+	return readfile.NewLimitReader(r, h.config.MaxBytes), nil
 }

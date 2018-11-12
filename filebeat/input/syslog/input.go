@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package syslog
 
 import (
@@ -25,7 +42,7 @@ import (
 // defined in https://tools.ietf.org/html/rfc3164#section-4.1.1.
 //
 // Example:
-// 2 => "Critial"
+// 2 => "Critical"
 type mapper []string
 
 var (
@@ -111,7 +128,7 @@ func NewInput(
 		Parse(data, ev)
 		var d *util.Data
 		if !ev.IsValid() {
-			log.Errorw("can't not parse event as syslog rfc3164", "message", string(data))
+			log.Errorw("can't parse event as syslog rfc3164", "message", string(data))
 			// On error revert to the raw bytes content, we need a better way to communicate this kind of
 			// error upstream this should be a global effort.
 			d = &util.Data{
@@ -157,6 +174,7 @@ func (p *Input) Run() {
 		err := p.server.Start()
 		if err != nil {
 			p.log.Error("Error starting the server", "error", err)
+			return
 		}
 		p.started = true
 	}
@@ -167,6 +185,10 @@ func (p *Input) Stop() {
 	defer p.outlet.Close()
 	p.Lock()
 	defer p.Unlock()
+
+	if !p.started {
+		return
+	}
 
 	p.log.Info("Stopping Syslog input")
 	p.server.Stop()
@@ -181,7 +203,11 @@ func (p *Input) Wait() {
 func createEvent(ev *event, metadata inputsource.NetworkMetadata, timezone *time.Location, log *logp.Logger) *beat.Event {
 	f := common.MapStr{
 		"message": strings.TrimRight(ev.Message(), "\n"),
-		"source":  metadata.RemoteAddr.String(),
+		"log": common.MapStr{
+			"source": common.MapStr{
+				"ip": metadata.RemoteAddr.String(),
+			},
+		},
 	}
 
 	syslog := common.MapStr{}

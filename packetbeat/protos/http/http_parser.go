@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package http
 
 import (
@@ -36,12 +53,12 @@ type message struct {
 	realIP       common.NetString
 
 	// Http Headers
-	contentLength    int
-	contentType      common.NetString
-	transferEncoding common.NetString
-	isChunked        bool
-	headers          map[string]common.NetString
-	size             uint64
+	contentLength int
+	contentType   common.NetString
+	encodings     []string
+	isChunked     bool
+	headers       map[string]common.NetString
+	size          uint64
 
 	rawHeaders []byte
 
@@ -77,7 +94,7 @@ type parserConfig struct {
 }
 
 var (
-	transferEncodingChunked = []byte("chunked")
+	transferEncodingChunked = "chunked"
 
 	constCRLF = []byte("\r\n")
 
@@ -88,6 +105,7 @@ var (
 	nameContentLength    = []byte("content-length")
 	nameContentType      = []byte("content-type")
 	nameTransferEncoding = []byte("transfer-encoding")
+	nameContentEncoding  = []byte("content-encoding")
 	nameConnection       = []byte("connection")
 )
 
@@ -349,7 +367,24 @@ func (parser *parser) parseHeader(m *message, data []byte) (bool, bool, int) {
 			} else if bytes.Equal(headerName, nameContentType) {
 				m.contentType = headerVal
 			} else if bytes.Equal(headerName, nameTransferEncoding) {
-				m.isChunked = bytes.Equal(common.NetString(headerVal), transferEncodingChunked)
+				encodings := parseCommaSeparatedList(headerVal)
+				// 'chunked' can only appear at the end
+				if n := len(encodings); n > 0 && encodings[n-1] == transferEncodingChunked {
+					m.isChunked = true
+					encodings = encodings[:n-1]
+				}
+				if len(encodings) > 0 {
+					// Append at the end of encodings. If a content-encoding
+					// header is also present, it was applied by sender before
+					// transfer-encoding.
+					m.encodings = append(m.encodings, encodings...)
+				}
+
+			} else if bytes.Equal(headerName, nameContentEncoding) {
+				encodings := parseCommaSeparatedList(headerVal)
+				// Append at the beginning of m.encodings, as Content-Encoding
+				// is supposed to be applied before Transfer-Encoding.
+				m.encodings = append(encodings, m.encodings...)
 			} else if bytes.Equal(headerName, nameConnection) {
 				m.connection = headerVal
 			}
@@ -383,6 +418,15 @@ func (parser *parser) parseHeader(m *message, data []byte) (bool, bool, int) {
 	}
 
 	return true, false, len(data)
+}
+
+func parseCommaSeparatedList(s common.NetString) (list []string) {
+	values := bytes.Split(s, []byte(","))
+	list = make([]string, len(values))
+	for idx := range values {
+		list[idx] = string(bytes.ToLower(bytes.Trim(values[idx], " ")))
+	}
+	return list
 }
 
 func (*parser) parseBody(s *stream, m *message) (ok, complete bool) {
@@ -559,16 +603,8 @@ func (m *message) headersReceived() bool {
 }
 
 func (m *message) getEndpoints() (src *common.Endpoint, dst *common.Endpoint) {
-	src = &common.Endpoint{
-		IP:   m.tcpTuple.SrcIP.String(),
-		Port: m.tcpTuple.SrcPort,
-		Proc: string(m.cmdlineTuple.Src),
-	}
-	dst = &common.Endpoint{
-		IP:   m.tcpTuple.DstIP.String(),
-		Port: m.tcpTuple.DstPort,
-		Proc: string(m.cmdlineTuple.Dst),
-	}
+	source, destination := common.MakeEndpointPair(m.tcpTuple.BaseTuple, m.cmdlineTuple)
+	src, dst = &source, &destination
 	if m.direction == tcp.TCPDirectionReverse {
 		src, dst = dst, src
 	}

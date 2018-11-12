@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package http
 
 import (
@@ -6,6 +23,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 
 	"github.com/elastic/beats/libbeat/beat"
 	"github.com/elastic/beats/libbeat/common"
@@ -67,6 +86,7 @@ type httpPlugin struct {
 	hideKeywords        []string
 	redactAuthorization bool
 	maxMessageSize      int
+	mustDecodeBody      bool
 
 	parserConfig parserConfig
 
@@ -122,6 +142,8 @@ func (http *httpPlugin) setFromConfig(config *httpConfig) {
 	http.splitCookie = config.SplitCookie
 	http.parserConfig.realIPHeader = strings.ToLower(config.RealIPHeader)
 	http.transactionTimeout = config.TransactionTimeout
+	http.mustDecodeBody = config.DecodeBody
+
 	for _, list := range [][]string{config.IncludeBodyFor, config.IncludeRequestBodyFor} {
 		http.parserConfig.includeRequestBodyFor = append(http.parserConfig.includeRequestBodyFor, list...)
 	}
@@ -398,7 +420,7 @@ func (http *httpPlugin) handleHTTP(
 
 	m.tcpTuple = *tcptuple
 	m.direction = dir
-	m.cmdlineTuple = procs.ProcWatcher.FindProcessesTuple(tcptuple.IPPort())
+	m.cmdlineTuple = procs.ProcWatcher.FindProcessesTupleTCP(tcptuple.IPPort())
 	http.hideHeaders(m)
 
 	if m.isRequest {
@@ -483,6 +505,8 @@ func (http *httpPlugin) newTransaction(requ, resp *message) beat.Event {
 	var timestamp time.Time
 
 	if requ != nil {
+		// Body must be decoded before extractParameters
+		http.decodeBody(requ)
 		path, params, err := http.extractParameters(requ)
 		if err != nil {
 			logp.Warn("Fail to parse HTTP parameters: %v", err)
@@ -516,6 +540,7 @@ func (http *httpPlugin) newTransaction(requ, resp *message) beat.Event {
 	}
 
 	if resp != nil {
+		http.decodeBody(resp)
 		httpDetails["response"] = common.MapStr{
 			"code":    resp.statusCode,
 			"phrase":  resp.statusPhrase,
@@ -553,13 +578,14 @@ func (http *httpPlugin) newTransaction(requ, resp *message) beat.Event {
 }
 
 func (http *httpPlugin) makeRawMessage(m *message) string {
-	var result []byte
-	result = append(result, m.rawHeaders...)
 	if m.sendBody {
-		result = append(result, m.body...)
+		var b strings.Builder
+		b.Grow(len(m.rawHeaders) + len(m.body))
+		b.Write(m.rawHeaders)
+		b.Write(m.body)
+		return b.String()
 	}
-	// TODO: (go1.10) Use strings.Builder to avoid allocation/copying
-	return string(result)
+	return string(m.rawHeaders)
 }
 
 func (http *httpPlugin) publishTransaction(event beat.Event) {
@@ -605,6 +631,38 @@ func (http *httpPlugin) setBody(result common.MapStr, m *message) {
 	if m.sendBody && len(m.body) > 0 {
 		result["body"] = string(m.body)
 	}
+}
+
+func (http *httpPlugin) decodeBody(m *message) {
+	if m.saveBody && len(m.body) > 0 {
+		if http.mustDecodeBody && len(m.encodings) > 0 {
+			var err error
+			m.body, err = decodeBody(m.body, m.encodings, http.maxMessageSize)
+			if err != nil {
+				// Body can contain partial data
+				m.notes = append(m.notes, err.Error())
+			}
+		}
+	}
+}
+
+func decodeBody(body []byte, encodings []string, maxSize int) (result []byte, err error) {
+	if isDebug {
+		debugf("decoding body with encodings=%v", encodings)
+	}
+	for idx := len(encodings) - 1; idx >= 0; idx-- {
+		format := encodings[idx]
+		body, err = decodeHTTPBody(body, format, maxSize)
+		if err != nil {
+			// Do not output a partial body unless failure occurs on the
+			// last decoder.
+			if idx != 0 {
+				body = nil
+			}
+			return body, errors.Wrapf(err, "unable to decode body using %s encoding", format)
+		}
+	}
+	return body, nil
 }
 
 func splitCookiesHeader(headerVal string) map[string]string {

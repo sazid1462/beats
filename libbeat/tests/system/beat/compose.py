@@ -9,6 +9,7 @@ INTEGRATION_TESTS = os.environ.get('INTEGRATION_TESTS', False)
 if INTEGRATION_TESTS:
     from compose.cli.command import get_project
     from compose.service import BuildAction
+    from compose.service import ConvergenceStrategy
 
 
 class ComposeMixin(object):
@@ -33,6 +34,9 @@ class ComposeMixin(object):
         if not INTEGRATION_TESTS or not cls.COMPOSE_SERVICES:
             return
 
+        if os.environ.get('NO_COMPOSE'):
+            return
+
         def print_logs(container):
             print("---- " + container.name_without_project)
             print(container.logs())
@@ -43,6 +47,7 @@ class ComposeMixin(object):
 
         project = cls.compose_project()
         project.up(
+            strategy=ConvergenceStrategy.always,
             service_names=cls.COMPOSE_SERVICES,
             do_build=BuildAction.force,
             timeout=30)
