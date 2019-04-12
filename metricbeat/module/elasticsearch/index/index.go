@@ -20,7 +20,6 @@ package index
 import (
 	"github.com/pkg/errors"
 
-	"github.com/elastic/beats/libbeat/common/cfgwarn"
 	"github.com/elastic/beats/metricbeat/helper/elastic"
 	"github.com/elastic/beats/metricbeat/mb"
 	"github.com/elastic/beats/metricbeat/module/elasticsearch"
@@ -31,6 +30,7 @@ import (
 func init() {
 	mb.Registry.MustAddMetricSet(elasticsearch.ModuleName, "index", New,
 		mb.WithHostParser(elasticsearch.HostParser),
+		mb.WithNamespace("elasticsearch.index"),
 	)
 }
 
@@ -46,8 +46,6 @@ type MetricSet struct {
 
 // New create a new instance of the MetricSet
 func New(base mb.BaseMetricSet) (mb.MetricSet, error) {
-	cfgwarn.Beta("the " + base.FullyQualifiedName() + " metricset is beta")
-
 	// TODO: This currently gets index data for all indices. Make it configurable.
 	ms, err := elasticsearch.NewMetricSet(base, statsPath)
 	if err != nil {
@@ -62,26 +60,26 @@ func (m *MetricSet) Fetch(r mb.ReporterV2) {
 	isMaster, err := elasticsearch.IsMaster(m.HTTP, m.HostData().SanitizedURI+statsPath)
 	if err != nil {
 		err = errors.Wrap(err, "error determining if connected Elasticsearch node is master")
-		elastic.ReportAndLogError(err, r, m.Log)
+		elastic.ReportAndLogError(err, r, m.Logger())
 		return
 	}
 
 	// Not master, no event sent
 	if !isMaster {
-		m.Log.Debug("trying to fetch index stats from a non-master node")
+		m.Logger().Debug("trying to fetch index stats from a non-master node")
 		return
 	}
 
 	content, err := m.HTTP.FetchContent()
 	if err != nil {
-		elastic.ReportAndLogError(err, r, m.Log)
+		elastic.ReportAndLogError(err, r, m.Logger())
 		return
 	}
 
 	info, err := elasticsearch.GetInfo(m.HTTP, m.HostData().SanitizedURI)
 	if err != nil {
 		err = errors.Wrap(err, "failed to get info from Elasticsearch")
-		elastic.ReportAndLogError(err, r, m.Log)
+		elastic.ReportAndLogError(err, r, m.Logger())
 		return
 	}
 
@@ -92,7 +90,7 @@ func (m *MetricSet) Fetch(r mb.ReporterV2) {
 	}
 
 	if err != nil {
-		m.Log.Error(err)
+		m.Logger().Error(err)
 		return
 	}
 }
