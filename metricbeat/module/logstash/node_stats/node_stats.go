@@ -18,7 +18,6 @@
 package node_stats
 
 import (
-	"github.com/elastic/beats/libbeat/common/cfgwarn"
 	"github.com/elastic/beats/metricbeat/helper"
 	"github.com/elastic/beats/metricbeat/helper/elastic"
 
@@ -53,8 +52,6 @@ type MetricSet struct {
 
 // New create a new instance of the MetricSet
 func New(base mb.BaseMetricSet) (mb.MetricSet, error) {
-	cfgwarn.Beta("the " + base.FullyQualifiedName() + " metricset is beta")
-
 	ms, err := logstash.NewMetricSet(base)
 	if err != nil {
 		return nil, err
@@ -76,13 +73,13 @@ func New(base mb.BaseMetricSet) (mb.MetricSet, error) {
 func (m *MetricSet) Fetch(r mb.ReporterV2) {
 	content, err := m.http.FetchContent()
 	if err != nil {
-		elastic.ReportAndLogError(err, r, m.Log)
+		elastic.ReportAndLogError(err, r, m.Logger())
 		return
 	}
 
 	err = eventMapping(r, content)
 	if err != nil {
-		m.Log.Error(err)
+		m.Logger().Error(err)
 		return
 	}
 }

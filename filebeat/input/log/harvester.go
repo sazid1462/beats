@@ -51,6 +51,7 @@ import (
 	"github.com/elastic/beats/filebeat/input/file"
 	"github.com/elastic/beats/filebeat/util"
 	"github.com/elastic/beats/libbeat/reader"
+	"github.com/elastic/beats/libbeat/reader/debug"
 	"github.com/elastic/beats/libbeat/reader/multiline"
 	"github.com/elastic/beats/libbeat/reader/readfile"
 	"github.com/elastic/beats/libbeat/reader/readfile/encoding"
@@ -390,12 +391,12 @@ func (h *Harvester) SendStateUpdate() {
 		return
 	}
 
-	logp.Debug("harvester", "Update state: %s, offset: %v", h.state.Source, h.state.Offset)
-	h.states.Update(h.state)
-
 	d := util.NewData()
 	d.SetState(h.state)
 	h.publishState(d)
+
+	logp.Debug("harvester", "Update state: %s, offset: %v", h.state.Source, h.state.Offset)
+	h.states.Update(h.state)
 }
 
 // shouldExportLine decides if the line is exported or not based on
@@ -558,7 +559,12 @@ func (h *Harvester) newLogFileReader() (reader.Reader, error) {
 		return nil, err
 	}
 
-	r, err = readfile.NewEncodeReader(h.log, h.encoding, h.config.BufferSize)
+	reader, err := debug.AppendReaders(h.log)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err = readfile.NewEncodeReader(reader, h.encoding, h.config.BufferSize)
 	if err != nil {
 		return nil, err
 	}
